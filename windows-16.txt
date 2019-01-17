@@ -1,0 +1,377 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "IO AWS Support - Author Vijayarengan R - Version [1.1] - A simple CF template for deploying a Windows 2K12 server into DC3 and installs SCCM client setup from s3 Bucket. Basic Template provided by Michael developed to include Tags, subnet, Tier security group, add to domain etc",
+    "Parameters": {
+        "OU": {
+            "Type": "String",
+            "Description": "Please enter name of the OU, where Windows Instance needs to be added while joining to Domain",
+            "Default": "OU=AWS,OU=Member Servers,DC=dc3dev,DC=internal"
+        },
+        "ChefRole": {
+            "Type": "String",
+            "Description": "Please enter name of an existing Chef Role for Windows setup on the instances created by this stack.",
+            "Default": "genericwindows"
+        },
+        "KeyPairName": {
+            "Description": "Name of an existing Amazon EC2 key pair for RDP access",
+            "Type": "String",
+            "Default": "nu-dc3-prod-wininst-euwest-key"
+        },
+        "InstanceType": {
+            "Description": "Amazon EC2 instance type",
+            "Type": "String",
+            "Default": "m3.medium",
+            "AllowedValues": [
+                "m1.small",
+                "m1.medium",
+                "m3.small",
+                "m3.medium"
+            ]
+        },
+        "VPCID": {
+            "Type": "String",
+            "Description": "Please enter VPC ID for Security Group Creation here.",
+            "Default": "vpc-2e222a4c"
+        },
+        "SourceCidrForRDP": {
+            "Description": "IP Cidr from which you are likely to RDP into the instance.",
+            "Type": "String",
+            "MinLength": "9",
+            "MaxLength": "18",
+            "Default": "10.0.0.0/8",
+            "AllowedPattern": "^([0-9]+\\.){3}[0-9]+\\/[0-9]+$"
+        },
+        "TierSubnetID": {
+            "Type": "String",
+            "Description": "Please enter Subnet ID for getting this Windows instance provisioned in VPC.",
+            "Default": "subnet-0af5de7e"
+        },
+        "TierSecurityGroupID": {
+            "Default": "sg-ec448389",
+            "Type": "String",
+            "Description": "Please enter Tier Security Group ID of the tier in which this stack will be provisioning a Windows Instance."
+        },
+        "DomainDNSName": {
+            "Description": "Please enter fully qualified domain name (FQDN) of the forest root domain e.g. ni.ad.newsint",
+            "Default": "ni.ad.newsint",
+            "Type": "String"
+        },
+        "DomainUser": {
+            "Type": "String",
+            "Default": "svc_rodc_domainjoin",
+            "Description": "Please enter user account which can join this server to domain."
+        },
+        "DomainUserPassword": {
+            "Description": "Password for a Domain user account. Must be at least 8 characters containing letters, numbers and symbols",
+            "Type": "String",
+            "MinLength": "8",
+            "MaxLength": "32",
+            "AllowedPattern": "(?=^.{6,255}$)((?=.*\\d)(?=.*[A-Z])(?=.*[a-z])|(?=.*\\d)(?=.*[^A-Za-z0-9])(?=.*[a-z])|(?=.*[^A-Za-z0-9])(?=.*[A-Z])(?=.*[a-z])|(?=.*\\d)(?=.*[A-Z])(?=.*[^A-Za-z0-9]))^.*",
+            "NoEcho": "True"
+        },
+        "TagName": {
+            "Description": "Default description as it appears in the console at Name Tag.",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "255",
+            "Default": "nu-dc3-dev-winmgmt-01",
+            "ConstraintDescription": "Can have any character with max. length of 255"
+        },
+        "TagShutdownTime": {
+            "Description": "This value must be a valid value in UTC time format. i.e. 19:00 for 7pm. This tag is used to specify when the service is shutdown. If the instance is up 24/7 then use the value of 0.",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "255",
+            "Default": "17:00"
+        },
+        "TagServiceOwner": {
+            "Description": "This value must be an valid existing NewsUK email address who owns the Product or Platform.",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "255",
+            "Default": "chet.patel@news.co.uk",
+            "ConstraintDescription": "Typically should be news int mail-id"
+        },
+        "TagServiceName": {
+            "Description": "Value of Instance TAG with key as ServiceName.",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "255",
+            "Default": "DC3",
+            "ConstraintDescription": "Fundamentally used to determine which project this corresponds to."
+        },
+        "TagHostname": {
+            "Description": "Please enter Value of Instance TAG with key as Hostname and this value will be used to set hostname of the instance with domain name.",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "15",
+            "Default": "DAWSMSMGMT02"
+        },
+        "TagSupportTeam": {
+            "Description": "Please enter Email ID of the SupportTeam who will suppport this Product or Platform.",
+            "Type": "String",
+            "MinLength": "1",
+            "MaxLength": "255",
+            "Default": "cloudoperations@news.co.uk",
+            "ConstraintDescription": "Typically should be News International email id"
+        },
+        "TagCostCentre": {
+            "Description": "Value of Resource TAG with key as CostCentre.",
+            "Type": "String",
+            "Default": "16501"
+        }
+    },
+    "Mappings": {
+        "AWSInstanceType2Arch": {
+            "m1.small": {
+                "Arch": "64"
+            },
+            "m1.medium": {
+                "Arch": "64"
+            },
+            "m3.small": {
+                "Arch": "64"
+            },
+            "m3.medium": {
+                "Arch": "64"
+            }
+        },
+        "AWSRegionArch2AMI": {
+            "eu-west-1": {
+                "64": "ami-0257a73abd386257f"
+            }
+        }
+    },
+    "Resources": {
+        "WinMgmtRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "Win_Mgmt_Policy",
+                        "PolicyDocument": {
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "s3:Get*",
+										"s3:List*",
+										"IAM:Get*",
+										"IAM:List*",
+                                        "ec2:Describe*"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "WinMgmtRoleProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "WinMgmtRole"
+                    }
+                ]
+            }
+        },
+        "InstanceSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Enable RDP",
+                "VpcId": {
+                    "Ref": "VPCID"
+                },
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "3389",
+                        "ToPort": "3389",
+                        "CidrIp": {
+                            "Ref": "SourceCidrForRDP"
+                        }
+                    }
+                ]
+            }
+        },
+        "WindowsServer": {
+            "Type": "AWS::EC2::Instance",
+            "Properties": {
+                "InstanceType": {
+                    "Ref": "InstanceType"
+                },
+                "ImageId": {
+                    "Fn::FindInMap": [
+                        "AWSRegionArch2AMI",
+                        {
+                            "Ref": "AWS::Region"
+                        },
+                        {
+                            "Fn::FindInMap": [
+                                "AWSInstanceType2Arch",
+                                {
+                                    "Ref": "InstanceType"
+                                },
+                                "Arch"
+                            ]
+                        }
+                    ]
+                },
+                "SubnetId": {
+                    "Ref": "TierSubnetID"
+                },
+                "SecurityGroupIds": [
+                    {
+                        "Ref": "TierSecurityGroupID"
+                    },
+                    {
+                        "Ref": "InstanceSecurityGroup"
+                    }
+                ],
+                "KeyName": {
+                    "Ref": "KeyPairName"
+                },
+                "IamInstanceProfile": {
+                    "Ref": "WinMgmtRoleProfile"
+                },
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "<powershell>\n",
+                                "\n",
+                                "set-executionpolicy -executionpolicy remotesigned\n",
+                                "$computer_name=gc env:computername\n",
+                                "$dc=$computer_name.substring(1)\n",
+                                "$dc=$dc.tolower()\n",
+                                "if ($dc.startswith(\"aws\"))\n",
+                                "{\n",
+                                "cd c:\\sccmsetup \n",
+                                "Start-Process -Wait cmd -ArgumentList \" /c C:\\sccmsetup\\ccmsetup.cmd\" \n",
+                                " SCHTASKS /delete /TN sccm-setup /f \n",
+                                " }\n",
+                                "else \n",
+                                "{\n",
+                                "cd c:\\ \n",
+                                "Read-s3object -BucketName deployment.s3.news.co.uk -keyprefix software/microsoft/sccm/agent/ -folder C:\\sccmsetup -region eu-west-1 \n",
+								"$credential = New-Object System.Management.Automation.PsCredential(\"",
+                                {
+                                    "Ref": "DomainUser"
+                                },
+                                "\",(ConvertTo-SecureString \"",
+                                {
+                                    "Ref": "DomainUserPassword"
+                                },
+                                "\" -AsPlainText -Force)) \n",
+                                "Add-Computer -DomainName ",
+                                {
+                                    "Ref": "DomainDNSName"
+                                },
+                                " -NewName ",
+                                {
+                                    "Ref": "TagHostname"
+                                },
+                                " -OUPath ",
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "\"",
+                                            {
+                                                "Ref": "OU"
+                                            },
+                                            "\""
+                                        ]
+                                    ]
+                                },
+                                " -Credential $credential \n",
+                                " cp \"C:\\Program Files\\Amazon\\Ec2ConfigService\\Scripts\\userscript.ps1\" \"C:\\sccmsetup\\userscript.ps1\" \n",
+                                "Read-s3object -BucketName deployment.s3.news.co.uk -key software/microsoft/sccm/batchcommands/sccmuserdata.bat -file C:\\sccmsetup\\sccmuserdata.bat -region eu-west-1 \n",
+                                " SCHTASKS /Create /SC ONSTART /TN sccm-setup /RU SYSTEM /TR \"C:\\sccmsetup\\sccmuserdata.bat\" \n",
+								
+								"Read-s3object -BucketName deployment.s3.news.co.uk -keyprefix services/windows-mgmt/ -folder C:\\zAWSAdmin\\scripts -region eu-west-1 \n",
+								
+                                "Restart-Computer -Force \n",
+								
+                                "}\n",
+                                "</powershell>"
+                            ]
+                        ]
+                    }
+                },
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": {
+                            "Ref": "TagName"
+                        }
+                    },
+                    {
+                        "Key": "ShutdownTime",
+                        "Value": {
+                            "Ref": "TagShutdownTime"
+                        }
+                    },
+                    {
+                        "Key": "ServiceOwner",
+                        "Value": {
+                            "Ref": "TagServiceOwner"
+                        }
+                    },
+                    {
+                        "Key": "ServiceName",
+                        "Value": {
+                            "Ref": "TagServiceName"
+                        }
+                    },
+                    {
+                        "Key": "Hostname",
+                        "Value": {
+                            "Ref": "TagHostname"
+                        }
+                    },
+                    {
+                        "Key": "SupportTeam",
+                        "Value": {
+                            "Ref": "TagSupportTeam"
+                        }
+                    },
+                    {
+                        "Key": "CostCentre",
+                        "Value": {
+                            "Ref": "TagCostCentre"
+                        }
+                    }
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "InstanceId": {
+            "Value": {
+                "Ref": "WindowsServer"
+            }
+        }
+    }
+}
